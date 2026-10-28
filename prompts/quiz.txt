@@ -29,15 +29,15 @@ Requirements:
 
 ## Vocabulary
 
-Select 5-8 useful Swedish words from the article, prioritizing everyday vocabulary and words essential for comprehension. Avoid overly basic beginner-level (pre-A1/A1) words.
-Provide concise English meanings and accurate Swedish word forms:
+Select 5–8 useful Swedish words from the article, prioritizing everyday vocabulary and words essential for comprehension. Avoid overly basic beginner-level (A1) words.
+
+Keep verbs together with their essential particles or prepositions when they form a common expression (e.g., "ta slut", "bero på", "fundera på").
 
 - Verbs: infinitiv, presens, preteritum, supinum.
 - Nouns: singular indefinite, singular definite, plural indefinite, plural definite.
 - Adjectives: en-form, ett-form, plural/bestämd form.
 - Other word classes: use an empty string if no relevant forms apply.
 
-Do not include unimportant words.
 
 ## Useful Expressions
 

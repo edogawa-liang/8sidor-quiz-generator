@@ -29,8 +29,7 @@ Requirements:
 
 ## Vocabulary
 
-Select 5–8 useful Swedish words from the article, prioritizing everyday vocabulary and words essential for comprehension.
-
+Select 5-8 useful Swedish words from the article, prioritizing everyday vocabulary and words essential for comprehension. Avoid overly basic beginner-level (pre-A1/A1) words.
 Provide concise English meanings and accurate Swedish word forms:
 
 - Verbs: infinitiv, presens, preteritum, supinum.

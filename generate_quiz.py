@@ -199,38 +199,55 @@ def generate_article_quiz(
     article,
     instructions,
     model="gpt-4.1-mini",
+    max_attempts=3,
 ):
-    """Generate listening comprehension exercises for one article."""
+    """Generate listening comprehension exercises with automatic retries."""
 
     prompt = build_prompt(article)
 
-    response = client.responses.create(
-        model=model,
-        instructions=instructions,
-        input=prompt,
-        text={
-            "format": {
-                "type": "json_object"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.responses.create(
+                model=model,
+                instructions=instructions,
+                input=prompt,
+                text={
+                    "format": {
+                        "type": "json_object"
+                    }
+                },
+            )
+
+            if not response.output_text:
+                raise ValueError("OpenAI returned an empty response.")
+
+            quiz = json.loads(response.output_text)
+
+            # Validate quiz structure
+            validate_quiz(quiz)
+
+            # Randomize correct answer positions
+            quiz["questions"] = shuffle_correct_answers(
+                quiz["questions"]
+            )
+
+            return {
+                **article,
+                "questions": quiz["questions"],
+                "vocabulary": quiz["vocabulary"],
+                "expressions": quiz["expressions"],
             }
-        },
-    )
 
-    if not response.output_text:
-        raise ValueError("OpenAI returned an empty response.")
+        except (ValueError, json.JSONDecodeError) as e:
+            print(
+                f"Quiz generation failed "
+                f"(attempt {attempt}/{max_attempts}): {e}"
+            )
 
-    quiz = json.loads(response.output_text)
-    validate_quiz(quiz)
+            if attempt == max_attempts:
+                raise
 
-    # Randomize correct answer positions
-    quiz["questions"] = shuffle_correct_answers(
-    quiz["questions"])
-
-    return {
-        **article,
-        "questions": quiz["questions"],
-        "vocabulary": quiz["vocabulary"],
-        "expressions": quiz["expressions"],
-    }
+            print("Retrying quiz generation...")
 
 
 def generate_all_quizzes(

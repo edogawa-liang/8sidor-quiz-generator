@@ -33,7 +33,7 @@ def save_articles_to_csv(articles, category):
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    filename = f"8sidor_upadate_{category}_{today}.csv"
+    filename = f"{category}_{today}.csv"
     output_path = output_dir / filename
 
     df.to_csv(
@@ -70,7 +70,9 @@ def load_articles_from_csv(csv_path):
 
 def main(
     category="varlden",
+    start_page=1,
     max_pages=1,
+    max_articles=10,
     delay=2,
     model="gpt-4.1-mini",
     use_existing_csv=False,
@@ -92,9 +94,12 @@ def main(
     """
 
     print("=" * 50)
-    print("8 Sidor - SFI C Quiz Generator")
+    print("8 Sidor - Quiz Generator")
     print(f"Category: {category}")
+    print(f"Start page: {start_page}")
     print(f"Max pages: {max_pages}")
+    print(f"Max articles: {max_articles}")
+    print(f"Request delay: {delay} seconds")
     print(f"Model: {model}")
     print("=" * 50)
 
@@ -125,7 +130,9 @@ def main(
 
         scraper = ArticleScraper(
             category=category,
+            start_page=start_page,
             max_pages=max_pages,
+            max_articles=max_articles,
             delay=delay
         )
 
@@ -187,7 +194,8 @@ def main(
 
     pdf_path = create_quiz_pdf(
         quizzes,
-        output_dir=BASE_DIR / "output"
+        output_dir=BASE_DIR / "Quiz",
+        category=category
     )
 
     # =====================================
@@ -208,7 +216,9 @@ if __name__ == "__main__":
 
     pdf_path = main(
         category="varlden",
+        start_page=1,
         max_pages=1,
+        max_articles=3,
         delay=1,
         model="gpt-4.1-mini",
         use_existing_csv=False

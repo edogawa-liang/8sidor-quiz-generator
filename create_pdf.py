@@ -1,413 +1,256 @@
-import re
-from pathlib import Path
+"""Create a one-page-per-article SFI Kurs C quiz PDF."""
+
 from datetime import datetime
+from pathlib import Path
 from xml.sax.saxutils import escape
 
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    PageBreak,
-    KeepTogether
-)
-
 from reportlab.lib import colors
-from reportlab.lib.styles import (
-    getSampleStyleSheet,
-    ParagraphStyle
-)
-
-from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
-
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
 
 
-from pathlib import Path
-
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
-
-# Configure fonts for macOS
-FONT_PATH = Path(
-    "/System/Library/Fonts/Supplemental/Arial.ttf"
-)
-
-if not FONT_PATH.exists():
-    raise FileNotFoundError(
-        f"Font file not found: {FONT_PATH}"
-    )
-
-# Register Swedish font
-pdfmetrics.registerFont(
-    TTFont("SwedishFont", str(FONT_PATH))
-)
-
-# Register Traditional Chinese font
-pdfmetrics.registerFont(
-    UnicodeCIDFont("MSung-Light")
-)
+FONT_PATHS = [
+    Path('/System/Library/Fonts/Supplemental/Arial.ttf'),
+    Path('/Library/Fonts/Arial.ttf'),
+    Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
+]
 
 
-def format_text(text):
-    """
-    Escape XML characters and apply a Chinese font
-    to Chinese text.
-
-    Args:
-        text (str): Input text.
-
-    Returns:
-        str: ReportLab-compatible formatted text.
-    """
-
-    text = escape(str(text))
-
-    # Use a Chinese font for CJK characters
-    pattern = r"([\u3400-\u9fff]+)"
-
-    text = re.sub(
-        pattern,
-        r'<font name="MSung-Light">\1</font>',
-        text
-    )
-
-    return text.replace("\n", "<br/>")
+def register_font():
+    """Register a TrueType font supporting Swedish characters."""
+    font_path = next((path for path in FONT_PATHS if path.is_file()), None)
+    if font_path is None:
+        raise FileNotFoundError('No supported Swedish font was found.')
+    pdfmetrics.registerFont(TTFont('SwedishFont', str(font_path)))
 
 
 def create_styles():
-    """
-    Create PDF paragraph styles.
-
-    Returns:
-        dict: PDF styles.
-    """
-
-    styles = getSampleStyleSheet()
-
-    styles.add(
-        ParagraphStyle(
-            name="QuizTitle",
-            fontName="SwedishFont",
-            fontSize=20,
-            leading=28,
-            alignment=TA_CENTER,
-            spaceAfter=20
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name="ArticleTitle",
-            fontName="SwedishFont",
-            fontSize=15,
-            leading=23,
-            textColor=colors.HexColor("#17365D"),
-            spaceAfter=12
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name="SectionTitle",
-            fontName="SwedishFont",
-            fontSize=12,
-            leading=18,
-            textColor=colors.HexColor("#17365D"),
-            spaceBefore=14,
-            spaceAfter=8
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name="QuizBody",
-            fontName="SwedishFont",
-            fontSize=10,
-            leading=17,
-            spaceAfter=9,
-            wordWrap="CJK"
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name="QuizSmall",
-            fontName="SwedishFont",
-            fontSize=8,
+    """Create styles for article headings, questions, and vocabulary."""
+    return {
+        'title': ParagraphStyle(
+            'ArticleTitle', fontName='SwedishFont', fontSize=15,
+            leading=20, textColor=colors.HexColor('#17365D'),
+        ),
+        'date': ParagraphStyle(
+            'ArticleDate', fontName='SwedishFont', fontSize=8,
+            leading=12, textColor=colors.grey,
+        ),
+        'question': ParagraphStyle(
+            'Question', fontName='SwedishFont', fontSize=10,
+            leading=15,
+        ),
+        'option': ParagraphStyle(
+            'Option', fontName='SwedishFont', fontSize=9.5,
+            leading=14, leftIndent=12,
+        ),
+        'section': ParagraphStyle(
+            'Section', fontName='SwedishFont', fontSize=11,
+            leading=16, textColor=colors.HexColor('#17365D'),
+        ),
+        'detail': ParagraphStyle(
+            'Detail', fontName='SwedishFont', fontSize=9,
             leading=13,
-            textColor=colors.grey,
-            spaceAfter=8,
-            wordWrap="CJK"
-        )
-    )
-
-    return styles
-
-
-def add_paragraph(story, text, style):
-    """
-    Add formatted text to the PDF story.
-    """
-
-    story.append(
-        Paragraph(
-            format_text(text),
-            style
-        )
-    )
+        ),
+        'url': ParagraphStyle(
+            'ArticleURL',
+            fontName='SwedishFont',
+            fontSize=8,
+            leading=12,
+            textColor=colors.HexColor('#2563EB'),
+            wordWrap='CJK',
+        ),
+    }
 
 
-def add_article(story, article, styles, index):
-    """
-    Add an article and its exercises to the PDF.
-    """
+def add_block(blocks, text, style, gap=5):
+    """Append a safe paragraph and its following spacing."""
+    blocks.append((Paragraph(escape(str(text)), style), gap))
+
+
+def build_blocks(article, styles, index):
+    """Build the printable blocks, excluding transcript and answers."""
+    blocks = []
 
     # Article title
-    add_paragraph(
-        story,
-        f"{index}. {article['title']}",
-        styles["ArticleTitle"]
-    )
+    add_block(blocks, article['title'], styles['title'], 5)
 
     # Publication date
-    add_paragraph(
-        story,
+    add_block(
+        blocks,
         f"Date: {article['date']}",
-        styles["QuizSmall"]
+        styles['date'],
+        4,
     )
 
-    # Article URL
-    add_paragraph(
-        story,
-        f"Source: {article['url']}",
-        styles["QuizSmall"]
-    )
+    # Clickable article URL
+    url = str(article.get('url', '')).strip()
 
-    # Original article
-    add_paragraph(
-        story,
-        "Reading Text",
-        styles["SectionTitle"]
-    )
+    if url.startswith(('https://', 'http://')):
+        safe_url = escape(url, {'"': '&quot;'})
 
-    for paragraph in article["text"].split("\n\n"):
-        if paragraph.strip():
-            add_paragraph(
-                story,
-                paragraph,
-                styles["QuizBody"]
+        blocks.append(
+            (
+                Paragraph(
+                    f'<link href="{safe_url}" color="#2563EB">'
+                    f'{escape(url)}'
+                    f'</link>',
+                    styles['url'],
+                ),
+                12,
+            )
+        )
+    else:
+        blocks.append((None, 10))
+
+    for number, item in enumerate(article['questions'], start=1):
+        add_block(blocks, f"{number}. {item['question']}", styles['question'], 5)
+        for letter in ('A', 'B', 'C'):
+            add_block(
+                blocks, f"{letter}. {item['options'][letter]}",
+                styles['option'], 3,
+            )
+        blocks.append((None, 9))
+
+    if article.get('vocabulary'):
+        add_block(blocks, 'Vocabulary', styles['section'], 7)
+        for item in article['vocabulary']:
+            # The generator should use meaning_en, not meaning_zh.
+            word = item['word_sv']
+            meaning = item['meaning_en']
+            forms = item.get('word_forms', '')
+            text = f'{word} — {meaning}'
+            if forms:
+                text += f'  |  {forms}'
+            add_block(blocks, text, styles['detail'], 5)
+
+    if article.get('expressions'):
+        blocks.append((None, 7))
+        add_block(blocks, 'Useful Expressions', styles['section'], 7)
+        for item in article['expressions']:
+            add_block(
+                blocks,
+                f"{item['expression_sv']} — {item['meaning_en']}",
+                styles['detail'], 5,
             )
 
-    # Reading comprehension questions
-    add_paragraph(
-        story,
-        "Reading Comprehension",
-        styles["SectionTitle"]
+    return blocks
+
+
+def draw_article_page(pdf, article, styles, index):
+    """Render exactly one A4 page, scaling content down if needed."""
+    page_width, page_height = A4
+    left = 1.8 * cm
+    right = 1.8 * cm
+    top = 1.7 * cm
+    bottom = 2.3 * cm
+    content_width = page_width - left - right
+    available_height = page_height - top - bottom
+
+    blocks = build_blocks(article, styles, index)
+    measured = []
+    total_height = 0
+    for paragraph, gap in blocks:
+        height = paragraph.wrap(content_width, page_height)[1] if paragraph else 0
+        measured.append((paragraph, height, gap))
+        total_height += height + gap
+
+    scale = min(1.0, available_height / max(total_height, 1))
+    pdf.saveState()
+    pdf.translate(left, page_height - top)
+    pdf.scale(scale, scale)
+    y = 0
+    for paragraph, height, gap in measured:
+        if paragraph is not None:
+            paragraph.drawOn(pdf, 0, y - height)
+        y -= height + gap
+    pdf.restoreState()
+
+    answers = '   '.join(
+        f"{number}.{question['correct_answer']}"
+        for number, question in enumerate(article['questions'], start=1)
     )
-
-    for number, item in enumerate(
-        article["questions"],
-        start=1
-    ):
-        add_paragraph(
-            story,
-            f"{number}. {item['question']}",
-            styles["QuizBody"]
-        )
-
-        story.append(Spacer(1, 0.4 * cm))
-
-    # Vocabulary
-    add_paragraph(
-        story,
-        "Important Vocabulary",
-        styles["SectionTitle"]
-    )
-
-    for item in article["vocabulary"]:
-
-        text = (
-            f"{item['word']} - {item['meaning']}\n"
-            f"Example: {item['example']}"
-        )
-
-        add_paragraph(
-            story,
-            text,
-            styles["QuizBody"]
-        )
-
-    # Grammar
-    add_paragraph(
-        story,
-        "Grammar and Sentence Patterns",
-        styles["SectionTitle"]
-    )
-
-    for item in article["grammar"]:
-
-        text = (
-            f"{item['pattern']}\n"
-            f"{item['explanation']}\n"
-            f"Example: {item['example']}"
-        )
-
-        add_paragraph(
-            story,
-            text,
-            styles["QuizBody"]
-        )
+    pdf.setFont('SwedishFont', 7)
+    pdf.setFillColor(colors.grey)
+    pdf.drawRightString(page_width - right, 1.1 * cm, f'Answers: {answers}')
+    pdf.setFillColor(colors.black)
+    pdf.showPage()
 
 
-def add_answer_key(story, articles, styles):
-    """
-    Add answers for all articles at the end of the PDF.
-    """
-
-    story.append(PageBreak())
-
-    add_paragraph(
-        story,
-        "Answer Key",
-        styles["QuizTitle"]
-    )
-
-    for index, article in enumerate(articles, start=1):
-
-        add_paragraph(
-            story,
-            f"{index}. {article['title']}",
-            styles["ArticleTitle"]
-        )
-
-        for number, item in enumerate(
-            article["questions"],
-            start=1
-        ):
-
-            add_paragraph(
-                story,
-                f"{number}. {item['answer']}",
-                styles["QuizBody"]
-            )
-
-
-def add_page_number(canvas, doc):
-    """
-    Add page numbers to each PDF page.
-    """
-
-    canvas.saveState()
-
-    canvas.setFont("SwedishFont", 8)
-
-    canvas.drawRightString(
-        A4[0] - 2 * cm,
-        1.5 * cm,
-        f"Page {doc.page}"
-    )
-
-    canvas.restoreState()
-
-
-def create_quiz_pdf(articles, output_dir="quiz"):
-    """
-    Generate a PDF containing all article exercises.
-
-    Args:
-        articles (list[dict]): Generated quiz data.
-        output_dir (str): PDF output directory.
-
-    Returns:
-        Path: Generated PDF path.
-    """
-
+def create_quiz_pdf(articles, output_dir='output', category='varlden'):
+    """Save one PDF with exactly one page per article."""
     if not articles:
-        raise ValueError("No quiz data available.")
+        raise ValueError('No quiz data available.')
 
-    # Create output directory
+    register_font()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Generate filename using today's date
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    filename = f"Quiz_{today}.pdf"
-
-    pdf_path = output_path / filename
-
-    # Configure PDF
-    doc = SimpleDocTemplate(
-        str(pdf_path),
-        pagesize=A4,
-        rightMargin=2 * cm,
-        leftMargin=2 * cm,
-        topMargin=2 * cm,
-        bottomMargin=2 * cm
+    pdf_path = get_unique_pdf_path(
+        output_path,
+        category,
+        articles
     )
 
+    pdf = canvas.Canvas(str(pdf_path), pagesize=A4)
+    pdf.setTitle('SFI Kurs C - Listening Practice')
     styles = create_styles()
 
-    story = []
-
-    # Cover page
-    add_paragraph(
-        story,
-        "SFI Kurs C - Reading Practice",
-        styles["QuizTitle"]
-    )
-
-    add_paragraph(
-        story,
-        f"Generated: {today}",
-        styles["QuizBody"]
-    )
-
-    add_paragraph(
-        story,
-        f"Total articles: {len(articles)}",
-        styles["QuizBody"]
-    )
-
-    story.append(PageBreak())
-
-    # Add all articles
     for index, article in enumerate(articles, start=1):
+        print(f'Adding article {index}/{len(articles)} to PDF')
+        draw_article_page(pdf, article, styles, index)
 
-        print(
-            f"Adding article {index}/{len(articles)} to PDF"
-        )
+    pdf.save()
+    print(f'\nPDF created: {pdf_path}')
+    return pdf_path
 
-        add_article(
-            story,
-            article,
-            styles,
-            index
-        )
+def get_unique_pdf_path(output_dir, category, articles):
+    """Build a unique PDF filename from the article date range."""
 
-        if index < len(articles):
-            story.append(PageBreak())
+    dates = sorted({
+        datetime.strptime(str(article["date"]), "%Y-%m-%d").date()
+        for article in articles
+        if article.get("date")
+        and str(article["date"]).strip().lower() not in {"nan", "none"}
+    })
 
-    # Add answer key
-    add_answer_key(
-        story,
-        articles,
-        styles
-    )
+    if not dates:
+        date_range = datetime.now().strftime("%Y%m%d")
 
-    # Generate PDF
-    doc.build(
-        story,
-        onFirstPage=add_page_number,
-        onLaterPages=add_page_number
-    )
+    else:
+        first_date = dates[0]
+        last_date = dates[-1]
 
-    print(f"\nPDF created: {pdf_path}")
+        if first_date == last_date:
+            date_range = first_date.strftime("%Y%m%d")
+
+        elif first_date.year == last_date.year:
+            if first_date.month == last_date.month:
+                date_range = (
+                    f"{first_date:%Y%m%d}-{last_date:%d}"
+                )
+            else:
+                date_range = (
+                    f"{first_date:%Y%m%d}-{last_date:%m%d}"
+                )
+
+        else:
+            date_range = (
+                f"{first_date:%Y%m%d}-{last_date:%Y%m%d}"
+            )
+
+    base_name = f"{category}_{date_range}"
+    pdf_path = output_dir / f"{base_name}.pdf"
+
+    # Avoid overwriting an existing PDF
+    counter = 2
+
+    while pdf_path.exists():
+        pdf_path = output_dir / f"{base_name}_{counter}.pdf"
+        counter += 1
 
     return pdf_path

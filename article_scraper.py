@@ -32,7 +32,9 @@ class ArticleScraper:
     def __init__(
         self,
         category="varlden",
+        start_page=1,
         max_pages=3,
+        max_articles=10,
         delay=2
     ):
         """
@@ -40,12 +42,24 @@ class ArticleScraper:
 
         Args:
             category (str): News category.
-            max_pages (int): Maximum number of category pages.
+            start_page (int): First category page to scrape.
+            max_pages (int): Maximum number of pages to scrape.
+            max_articles (int): Maximum number of articles.
             delay (float): Delay between HTTP requests.
         """
 
+        if start_page < 1:
+            raise ValueError("start_page must be at least 1.")
+
+        if max_pages < 1 or max_articles < 1:
+            raise ValueError(
+                "max_pages and max_articles must be positive."
+            )
+
         self.category = category.strip("/")
+        self.start_page = start_page
         self.max_pages = max_pages
+        self.max_articles = max_articles
         self.delay = delay
 
         # Create a reusable HTTP session
@@ -78,125 +92,82 @@ class ArticleScraper:
         )
 
     def get_article_urls(self, page_url):
-        """
-        Extract unique article URLs from a category page.
-
-        Args:
-            page_url (str): Category page URL.
-
-        Returns:
-            list[str]: Unique article URLs.
-        """
-
-        response = self.session.get(
-            page_url,
-            timeout=20
-        )
-
+        """Read article metadata from the category listing (no article requests)."""
+        response = self.session.get(page_url, timeout=20)
         response.raise_for_status()
-
-        # Parse HTML
         tree = html.fromstring(response.content)
-
-        # Extract links from article elements
-        links = tree.xpath(
-            '//article//a[@href]/@href'
-        )
-
-        article_urls = []
-
-        # Match article URL paths
-        pattern = (
-            rf"/{re.escape(self.category)}/"
-            rf"\d{{4}}/\d{{2}}/[^/]+/?"
-        )
-
-        for link in links:
-
-            # Convert relative URLs to absolute URLs
-            full_url = urljoin(page_url, link)
-
-            # Remove fragments such as #comments
-            full_url, _ = urldefrag(full_url)
-
-            # Parse the URL
-            parsed_url = urlparse(full_url)
-
-            path = parsed_url.path
-
-            # Keep only valid article URLs
-            if (
-                parsed_url.netloc == "8sidor.se"
-                and re.fullmatch(pattern, path)
-            ):
-                article_urls.append(full_url)
-
-        # Remove duplicates while preserving order
-        return list(dict.fromkeys(article_urls))
-
-    def scrape_article_urls(self):
-        """
-        Collect article URLs from multiple category pages.
-
-        Returns:
-            list[str]: Unique article URLs.
-        """
-
-        all_urls = []
+        pattern = rf"/{re.escape(self.category)}/\d{{4}}/\d{{2}}/[^/]+/?"
+        results = []
         seen = set()
 
-        for page in range(1, self.max_pages + 1):
+        # The listing card contains an excerpt and a sibling .bottom-links date.
+        # Search the nearest card ancestor for each excerpt, rather than
+        # accidentally assigning another card's date.
+        for excerpt in tree.xpath('//div[contains(concat(" ", normalize-space(@class), " "), " excerpt ")][@data-url]'):
+            url = urljoin(page_url, excerpt.get('data-url'))
+            url, _ = urldefrag(url)
+            parsed = urlparse(url)
+            if parsed.netloc not in ('8sidor.se', 'www.8sidor.se') or not re.fullmatch(pattern, parsed.path):
+                continue
+            if url in seen:
+                continue
 
+            date = None
+            title = None
+            # Climb from the excerpt until we find the corresponding date.
+            card = excerpt
+            for _ in range(5):
+                parent = card.getparent()
+                if parent is None or parent.tag == 'body':
+                    break
+                card = parent
+                dates = card.xpath('.//p[contains(concat(" ", normalize-space(@class), " "), " bottom-links ")]//span[contains(concat(" ", normalize-space(@class), " "), " date ")]')
+                if dates:
+                    date = self.parse_swedish_date(dates[0].text_content().strip())
+                    headings = card.xpath('.//h2 | .//h3 | .//h4')
+                    if headings:
+                        title = headings[0].text_content().strip()
+                    break
+
+            seen.add(url)
+            results.append({'url': url, 'title': title, 'date': date})
+
+        return results
+
+    def scrape_article_urls(self):
+        """Collect at most max_articles entries, up to max_pages pages."""
+        articles = []
+        seen = set()
+        end_page = self.start_page + self.max_pages
+
+        for page in range(self.start_page, end_page):
             page_url = self.get_page_url(page)
-
             print(
-                f"\nScraping page {page}/{self.max_pages}"
+                f"\nScraping listing page {page}: {page_url}"
             )
-
-            print(f"URL: {page_url}")
-
             try:
-
-                urls = self.get_article_urls(page_url)
-
-                if not urls:
-                    print("No articles found. Stopping.")
-                    break
-
-                new_count = 0
-
-                for url in urls:
-
-                    if url not in seen:
-
-                        seen.add(url)
-                        all_urls.append(url)
-
-                        new_count += 1
-
-                print(
-                    f"Found {new_count} new article URLs"
-                )
-
-                if new_count == 0:
-                    print("No new URLs found. Stopping.")
-                    break
-
+                items = self.get_article_urls(page_url)
             except requests.RequestException as e:
-
                 print(f"Request failed: {e}")
                 break
-
-            # Add a delay between category page requests
-            if page < self.max_pages:
+            if not items:
+                print('No articles found. Stopping.')
+                break
+            new_count = 0
+            for item in items:
+                if item['url'] in seen:
+                    continue
+                seen.add(item['url'])
+                articles.append(item)
+                new_count += 1
+                if len(articles) >= self.max_articles:
+                    break
+            print(f"Collected {len(articles)}/{self.max_articles} articles")
+            if len(articles) >= self.max_articles or new_count == 0:
+                break
+            if page < end_page - 1:
                 time.sleep(self.delay)
-
-        print(
-            f"\nTotal article URLs collected: "
-            f"{len(all_urls)}"
-        )
-
-        return all_urls
+        return articles
 
     def parse_swedish_date(self, date_string):
         """
@@ -240,7 +211,7 @@ class ArticleScraper:
         except ValueError:
             return None
 
-    def get_article_text(self, url):
+    def get_article_text(self, url, listing_date=None, listing_title=None):
         """
         Extract article title, date, and text.
 
@@ -273,38 +244,14 @@ class ArticleScraper:
             "//h1"
         )
 
-        title = (
+        title = listing_title or (
             title_elements[0].text_content().strip()
             if title_elements
             else None
         )
 
-        # ==========================
-        # 2. Extract publication date
-        # ==========================
-
-        date_elements = tree.xpath(
-            '//p[contains(concat(" ", '
-            'normalize-space(@class), " "), '
-            '" date ")]'
-        )
-
-        if date_elements:
-
-            # Extract the Swedish date
-            raw_date = (
-                date_elements[0]
-                .text_content()
-                .strip()
-            )
-
-            # Convert to ISO format
-            date = self.parse_swedish_date(
-                raw_date
-            )
-
-        else:
-            date = None
+        # Date already extracted from listing page; no need to look it up here.
+        date = listing_date
 
         # ==========================
         # 3. Extract article text
@@ -341,7 +288,7 @@ class ArticleScraper:
             "text": article_text
         }
 
-    def scrape_articles(self, urls):
+    def scrape_articles(self, entries):
         """
         Extract article information from multiple URLs.
 
@@ -354,10 +301,10 @@ class ArticleScraper:
 
         articles = []
 
-        total = len(urls)
+        total = len(entries)
 
-        for index, url in enumerate(
-            urls,
+        for index, entry in enumerate(
+            entries,
             start=1
         ):
 
@@ -367,7 +314,9 @@ class ArticleScraper:
 
             try:
 
-                article = self.get_article_text(url)
+                article = self.get_article_text(
+                    entry["url"], entry["date"], entry["title"]
+                )
 
                 if article["text"]:
 
@@ -389,7 +338,7 @@ class ArticleScraper:
                 else:
 
                     print(
-                        f"Article text not found: {url}"
+                        f"Article text not found: {entry['url']}"
                     )
 
             except requests.RequestException as e:
@@ -417,28 +366,30 @@ class ArticleScraper:
 
         print("=" * 50)
         print("8 Sidor Article Scraper")
+        print(f"Start page: {self.start_page}")
         print(f"Category: {self.category}")
         print(f"Max pages: {self.max_pages}")
+        print(f"Max articles: {self.max_articles}")
         print(f"Request delay: {self.delay} seconds")
         print("=" * 50)
 
         # Step 1: Collect article URLs
         print("\n[Step 1] Collecting article URLs...")
 
-        urls = self.scrape_article_urls()
+        entries = self.scrape_article_urls()
 
-        if not urls:
+        if not entries:
             print("No article URLs found.")
             return []
 
         # Step 2: Extract article data
         print("\n[Step 2] Extracting article data...")
 
-        articles = self.scrape_articles(urls)
+        articles = self.scrape_articles(entries)
 
         print("\n" + "=" * 50)
         print("Scraping completed!")
-        print(f"Total URLs: {len(urls)}")
+        print(f"Total listing entries: {len(entries)}")
         print(f"Total articles: {len(articles)}")
         print("=" * 50)
 
@@ -450,3 +401,14 @@ class ArticleScraper:
         """
 
         self.session.close()
+
+if __name__ == "__main__":
+    scraper = ArticleScraper(category="varlden", start_page=3, max_pages=3, max_articles=10, delay=2)
+    try:
+        articles = scraper.run()
+        import json
+        with open("articles.json", "w", encoding="utf-8") as f:
+            json.dump(articles, f, ensure_ascii=False, indent=2)
+        print(f"Saved {len(articles)} articles to articles.json")
+    finally:
+        scraper.close()
